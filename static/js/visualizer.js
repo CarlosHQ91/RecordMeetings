@@ -45,15 +45,15 @@ class AudioWaveVisualizer {
         const percent = val / 255;
         const barHeight = Math.max(4, percent * (height - 6));
 
-        // Create gradient from indigo to cyan
+        // Create gradient Apple Blue to Cyan
         const gradient = this.ctx.createLinearGradient(0, height, 0, 0);
-        gradient.addColorStop(0, '#6366f1');
-        gradient.addColorStop(0.7, '#06b6d4');
-        gradient.addColorStop(1, '#38bdf8');
+        gradient.addColorStop(0, '#0071e3');
+        gradient.addColorStop(0.65, '#30b0c7');
+        gradient.addColorStop(1, '#5856d6');
 
         this.ctx.fillStyle = gradient;
         this.ctx.beginPath();
-        this.ctx.roundRect(x, height - barHeight, barWidth, barHeight, 3);
+        this.ctx.roundRect(x, height - barHeight, barWidth, barHeight, 4);
         this.ctx.fill();
 
         x += barWidth + 3;
@@ -68,8 +68,8 @@ class AudioWaveVisualizer {
     const height = this.canvas.height;
     this.ctx.clearRect(0, 0, width, height);
 
-    this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
-    this.ctx.lineWidth = 2;
+    this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.07)';
+    this.ctx.lineWidth = 1.5;
     this.ctx.beginPath();
     this.ctx.moveTo(0, height / 2);
     this.ctx.lineTo(width, height / 2);

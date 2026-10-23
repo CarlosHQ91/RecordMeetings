@@ -13,6 +13,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const playbackPreview = document.getElementById('playbackPreview');
   const videoPlaceholder = document.getElementById('videoPlaceholder');
   const liveBadge = document.getElementById('liveBadge');
+  const playbackReadyBadge = document.getElementById('playbackReadyBadge');
   const recTimer = document.getElementById('recTimer');
 
   const btnStart = document.getElementById('btnStart');
@@ -20,6 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnStop = document.getElementById('btnStop');
   const btnTranscribe = document.getElementById('btnTranscribe');
   const btnSummarize = document.getElementById('btnSummarize');
+  const btnReset = document.getElementById('btnReset');
 
   const systemVolume = document.getElementById('systemVolume');
   const micVolume = document.getElementById('micVolume');
@@ -126,6 +128,8 @@ document.addEventListener('DOMContentLoaded', () => {
       videoPlaceholder.style.display = 'none';
       playbackPreview.style.display = 'none';
       livePreview.style.display = 'block';
+      playbackReadyBadge.style.display = 'none';
+      btnReset.style.display = 'none';
 
       showToast("🔴 Grabando reunión. Habla y comparte pestañas con audio.");
     } else if (state.status === 'paused') {
@@ -155,12 +159,14 @@ document.addEventListener('DOMContentLoaded', () => {
         playbackPreview.style.display = 'block';
         playbackPreview.pause();
         playbackPreview.currentTime = 0;
+        playbackReadyBadge.style.display = 'flex';
 
         btnDownloadVideo.disabled = false;
         btnDownloadAudio.disabled = false;
         btnTranscribe.disabled = false;
+        btnReset.style.display = 'inline-flex';
 
-        showToast("⏹️ Grabación detenida y guardada. El video NO sigue grabando.", 4500);
+        showToast("⏹️ Grabación detenida y guardada. Puedes reproducir, transcribir o descartar.", 4500);
       }
     }
   };
@@ -221,6 +227,65 @@ document.addEventListener('DOMContentLoaded', () => {
   btnStop.addEventListener('click', async () => {
     await recorder.stop();
     visualizer.stop();
+  });
+
+  // Reset / Discard & Start New Recording without page reload
+  btnReset.addEventListener('click', () => {
+    // 1. Reset recorded blobs & data
+    recordedVideoBlob = null;
+    recordedAudioWavBlob = null;
+    currentTranscriptData = null;
+    currentSummaryData = null;
+
+    // 2. Reset video elements
+    playbackPreview.pause();
+    playbackPreview.src = '';
+    playbackPreview.style.display = 'none';
+    playbackReadyBadge.style.display = 'none';
+    liveBadge.style.display = 'none';
+    recTimer.style.display = 'none';
+    recTimer.textContent = '00:00:00';
+    videoPlaceholder.style.display = 'flex';
+
+    // 3. Reset visualizer
+    visualizer.stop();
+
+    // 4. Reset action buttons
+    btnStart.disabled = false;
+    btnPause.disabled = true;
+    btnStop.disabled = true;
+    btnTranscribe.disabled = true;
+    btnReset.style.display = 'none';
+
+    // 5. Reset download buttons
+    btnDownloadVideo.disabled = true;
+    btnDownloadAudio.disabled = true;
+    btnDownloadTxt.disabled = true;
+    btnDownloadSrt.disabled = true;
+    btnDownloadMd.disabled = true;
+    btnSummarize.disabled = true;
+
+    // 6. Reset transcription and summary panels
+    transcriptArea.innerHTML = `
+      <div class="transcript-empty">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+        </svg>
+        <span>La transcripción aparecerá aquí durante o después de la reunión.</span>
+      </div>
+    `;
+
+    summaryArea.innerHTML = `
+      <div class="summary-block" style="text-align: center; color: var(--text-tertiary); padding: 3rem 1rem;">
+        <p>Genera la transcripción primero para obtener el resumen ejecutivo y lista de tareas automáticas.</p>
+      </div>
+    `;
+
+    // Reset tab to transcription
+    const tabFirst = document.querySelector('[data-tab="transcription"]');
+    if (tabFirst) tabFirst.click();
+
+    showToast("✨ Grabación anterior descartada. Listo para grabar de nuevo.");
   });
 
   // Transcription Flow
