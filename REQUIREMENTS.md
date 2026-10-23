@@ -124,3 +124,25 @@ pyinstaller --noconfirm --onedir --windowed --add-data "static;static" server.py
 ```
 Produce un ejecutable independiente en la carpeta `dist/server/server.exe`.
 
+---
+
+## 8. Despliegue en la Nube 24/7 (Render / Hugging Face Spaces)
+
+Para tener el sistema activo 24 horas al día con una URL pública HTTPS gratuita y fija:
+
+### Paso 1: Subir código a GitHub
+1. Entra a [github.com/new](https://github.com/new) y crea un repositorio (ej. `MeetRecordAI`).
+2. En tu terminal ejecuta:
+   ```bash
+   git remote add origin https://github.com/TU-USUARIO/MeetRecordAI.git
+   git branch -M main
+   git push -u origin main
+   ```
+
+### Paso 2: Desplegar en Render.com (Gratis)
+1. Entra a [render.com](https://render.com) e inicia sesión con GitHub.
+2. Clic en **New +** -> **Web Service** o **Blueprint**.
+3. Selecciona tu repositorio `MeetRecordAI`.
+4. Render leerá automáticamente el archivo `render.yaml` y construirá el contenedor Docker con HTTPS gratuito.
+5. Obtendrás tu URL pública oficial: `https://meetrecord-ai.onrender.com`.
+
