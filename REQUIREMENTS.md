@@ -91,11 +91,11 @@ Eres MeetRecord AI Engine, un sistema especializado en:
   - Motor de captura y grabación de video/pantalla implementado en `static/js/recorder.js` (WebM VP9/Opus con timer y transcripción en vivo).
   - Visualizador de frecuencias y ondas en canvas creado en `static/js/visualizer.js`.
   - Backend API FastAPI con Whisper y extractor de minutas estructuradas implementado en `server.py`.
-  - **[2026-10-23 - 14:14]**:
-    - Creación de suite de distribución para otras PCs:
-      1. `setup.bat`: Instalador autónomo para Windows (auto-detecta e instala Python con `winget`, instala dependencias y genera acceso directo en el Escritorio).
-      2. `Dockerfile`: Soporte para despliegue en contenedores Docker multiplataforma.
-  - **Estado**: ✅ Listo para distribución y portabilidad en cualquier PC.
+  - **[2026-10-23 - 14:28]**:
+    - Rediseño completo de interfaz a **estilo Apple Cupertino Light UI/UX**: paleta blanca y porcelana (`#fbfbfd`), cristales esmerilados translúcidos con backdrop blur, tipografía SF/Outfit, controles segmentados tipo iOS y botones pill refinados.
+    - Flujo de **"Nueva Grabación" (Descartar y reiniciar)**: nuevo botón que resetea reproductor, chunks, ondas y transcripción con 1 clic para grabar otra reunión sin tener que recargar la página (`F5`).
+    - Cambios sincronizados y pusheados automáticamente a GitHub (`CarlosHQ91/RecordMeetings`).
+  - **Estado**: ✅ Sistema 100% enlazado, rediseñado y listo en la nube.
 
 ---
 
