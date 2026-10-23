@@ -131,18 +131,14 @@ Produce un ejecutable independiente en la carpeta `dist/server/server.exe`.
 Para tener el sistema activo 24 horas al día con una URL pública HTTPS gratuita y fija:
 
 ### Paso 1: Subir código a GitHub
-1. Entra a [github.com/new](https://github.com/new) y crea un repositorio (ej. `MeetRecordAI`).
-2. En tu terminal ejecuta:
-   ```bash
-   git remote add origin https://github.com/TU-USUARIO/MeetRecordAI.git
-   git branch -M main
-   git push -u origin main
-   ```
+- Repositorio oficial sincronizado: **[github.com/CarlosHQ91/RecordMeetings](https://github.com/CarlosHQ91/RecordMeetings)** (Rama: `main`).
 
 ### Paso 2: Desplegar en Render.com (Gratis)
-1. Entra a [render.com](https://render.com) e inicia sesión con GitHub.
-2. Clic en **New +** -> **Web Service** o **Blueprint**.
-3. Selecciona tu repositorio `MeetRecordAI`.
-4. Render leerá automáticamente el archivo `render.yaml` y construirá el contenedor Docker con HTTPS gratuito.
-5. Obtendrás tu URL pública oficial: `https://meetrecord-ai.onrender.com`.
+1. Entra a [dashboard.render.com](https://dashboard.render.com) e inicia sesión con GitHub.
+2. Haz clic en el botón azul **New +** (arriba a la derecha) y selecciona **Blueprint** (o **Web Service**).
+3. Selecciona tu repositorio: `CarlosHQ91/RecordMeetings`.
+4. Render detectará automáticamente el archivo `render.yaml` y construirá la imagen Docker.
+5. Haz clic en **Apply** (o **Create Web Service**).
+6. En 2-3 minutos tendrás tu URL pública HTTPS permanente:
+   - Ejemplo: `https://recordmeetings.onrender.com`.
 
