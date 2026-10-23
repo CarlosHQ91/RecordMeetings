@@ -38,7 +38,7 @@ class MeetingRecorder {
       this.screenStream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           displaySurface: 'browser',
-          frameRate: { ideal: 30, max: 60 },
+          frameRate: { ideal: 24, max: 30 },
           width: { ideal: 1920 },
           height: { ideal: 1080 }
         },
@@ -107,9 +107,10 @@ class MeetingRecorder {
         }
       }
 
+      // Optimized bitrate (1.5 Mbps) for rock-solid stability up to 4+ hours
       this.mediaRecorder = new MediaRecorder(this.combinedStream, {
         mimeType: selectedMime || 'video/webm',
-        videoBitsPerSecond: 3000000 // 3 Mbps for crisp text/slides
+        videoBitsPerSecond: 1500000 
       });
 
       this.mediaRecorder.ondataavailable = (event) => {
@@ -119,7 +120,7 @@ class MeetingRecorder {
         }
       };
 
-      this.mediaRecorder.start(1000); // 1 second time slices
+      this.mediaRecorder.start(2000); // 2 second slices for low CPU overhead
       this.isRecording = true;
       this.isPaused = false;
       this.startTime = Date.now();

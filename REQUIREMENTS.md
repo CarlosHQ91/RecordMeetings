@@ -91,11 +91,10 @@ Eres MeetRecord AI Engine, un sistema especializado en:
   - Motor de captura y grabación de video/pantalla implementado en `static/js/recorder.js` (WebM VP9/Opus con timer y transcripción en vivo).
   - Visualizador de frecuencias y ondas en canvas creado en `static/js/visualizer.js`.
   - Backend API FastAPI con Whisper y extractor de minutas estructuradas implementado en `server.py`.
-  - **[2026-10-23 - 14:28]**:
-    - Rediseño completo de interfaz a **estilo Apple Cupertino Light UI/UX**: paleta blanca y porcelana (`#fbfbfd`), cristales esmerilados translúcidos con backdrop blur, tipografía SF/Outfit, controles segmentados tipo iOS y botones pill refinados.
-    - Flujo de **"Nueva Grabación" (Descartar y reiniciar)**: nuevo botón que resetea reproductor, chunks, ondas y transcripción con 1 clic para grabar otra reunión sin tener que recargar la página (`F5`).
-    - Cambios sincronizados y pusheados automáticamente a GitHub (`CarlosHQ91/RecordMeetings`).
-  - **Estado**: ✅ Sistema 100% enlazado, rediseñado y listo en la nube.
+  - **[2026-10-23 - 14:31]**:
+    - Solución de FOUC e iconos SVG gigantes: se montaron rutas explícitas `/css` y `/js` en FastAPI (`server.py`) y se incrustó el CSS de Apple directamente en el `<head>` de `index.html` para evitar cualquier fallo de carga en navegadores.
+    - Sincronizado y actualizado en GitHub (`CarlosHQ91/RecordMeetings`).
+  - **Estado**: ✅ Servidor activo en `0.0.0.0:8765`, interfaz Apple UI blindada.
 
 ---
 

@@ -73,6 +73,109 @@ def system_info():
     }
 
 
+# Jobs cache for long recordings (e.g. 4-hour sessions)
+transcription_jobs = {}
+
+def process_transcription_job(job_id: str, tmp_path: str, model_size: str, language: Optional[str]):
+    try:
+        model = get_whisper_model(model_size)
+        if model is None:
+            transcription_jobs[job_id] = {"status": "error", "error": "Motor Whisper no disponible"}
+            return
+
+        print(f"[MeetRecord AI] Iniciando transcripción en segundo plano (Job: {job_id})...")
+        segments_gen, info = model.transcribe(
+            tmp_path,
+            language=language if language and language != "auto" else None,
+            beam_size=5,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=500)
+        )
+
+        total_duration = max(1.0, info.duration or 1.0)
+        segments = []
+        full_text_list = []
+
+        for s in segments_gen:
+            seg_data = {
+                "id": s.id,
+                "start": round(s.start, 2),
+                "end": round(s.end, 2),
+                "text": s.text.strip(),
+            }
+            segments.append(seg_data)
+            full_text_list.append(s.text.strip())
+
+            percent = min(99, int((s.end / total_duration) * 100))
+            transcription_jobs[job_id] = {
+                "status": "processing",
+                "progress": percent,
+                "current_time": round(s.end, 1),
+                "total_duration": round(total_duration, 1),
+                "text": " ".join(full_text_list),
+                "segments": segments
+            }
+
+        print(f"[MeetRecord AI] Transcripción Job {job_id} completada exitosamente.")
+        transcription_jobs[job_id] = {
+            "status": "completed",
+            "progress": 100,
+            "language": info.language,
+            "duration": round(info.duration, 2),
+            "text": " ".join(full_text_list),
+            "segments": segments
+        }
+    except Exception as e:
+        traceback.print_exc()
+        transcription_jobs[job_id] = {"status": "error", "error": str(e)}
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+
+
+@app.post("/api/transcribe/async")
+async def transcribe_audio_async(
+    file: UploadFile = File(...),
+    language: Optional[str] = Form(None),
+    model_size: Optional[str] = Form("base")
+):
+    """
+    Starts an async transcription job for long recordings up to 4+ hours without HTTP timeouts.
+    """
+    job_id = str(uuid.uuid4())
+    suffix = os.path.splitext(file.filename)[1] or ".webm"
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    transcription_jobs[job_id] = {
+        "status": "queued",
+        "progress": 0,
+        "size_bytes": len(content)
+    }
+
+    thread = threading.Thread(
+        target=process_transcription_job,
+        args=(job_id, tmp_path, model_size, language),
+        daemon=True
+    )
+    thread.start()
+
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/api/transcribe/status/{job_id}")
+def get_transcribe_status(job_id: str):
+    if job_id not in transcription_jobs:
+        raise HTTPException(status_code=404, detail="Job no encontrado")
+    return transcription_jobs[job_id]
+
+
 @app.post("/api/transcribe")
 async def transcribe_audio(
     file: UploadFile = File(...),
@@ -80,11 +183,10 @@ async def transcribe_audio(
     model_size: Optional[str] = Form("base")
 ):
     """
-    Transcribe audio file using Faster-Whisper.
-    Accepts webm, wav, mp3, mp4, etc.
+    Synchronous fallback for short recordings.
     """
     try:
-        suffix = os.path.splitext(file.filename)[1] or ".wav"
+        suffix = os.path.splitext(file.filename)[1] or ".webm"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             content = await file.read()
             tmp.write(content)
@@ -92,17 +194,12 @@ async def transcribe_audio(
 
         model = get_whisper_model(model_size)
         if model is None:
-            # Fallback if faster-whisper is not yet installed in local python
             os.remove(tmp_path)
             return JSONResponse(
                 status_code=503,
-                content={
-                    "error": "Motor Whisper no instalado",
-                    "details": "Ejecuta 'pip install -r requirements.txt' para habilitar transcripción offline."
-                }
+                content={"error": "Motor Whisper no instalado"}
             )
 
-        print(f"[MeetRecord AI] Transcribiendo archivo ({len(content)} bytes)...")
         segments_gen, info = model.transcribe(
             tmp_path,
             language=language if language and language != "auto" else None,
@@ -114,13 +211,12 @@ async def transcribe_audio(
         segments = []
         full_text_list = []
         for s in segments_gen:
-            seg_data = {
+            segments.append({
                 "id": s.id,
                 "start": round(s.start, 2),
                 "end": round(s.end, 2),
                 "text": s.text.strip(),
-            }
-            segments.append(seg_data)
+            })
             full_text_list.append(s.text.strip())
 
         try:
@@ -128,19 +224,16 @@ async def transcribe_audio(
         except Exception:
             pass
 
-        full_transcript = " ".join(full_text_list)
-
         return {
             "language": info.language,
-            "language_probability": round(info.language_probability, 2),
             "duration": round(info.duration, 2),
-            "text": full_transcript,
+            "text": " ".join(full_text_list),
             "segments": segments
         }
-
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error en transcripción: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @app.post("/api/summarize")

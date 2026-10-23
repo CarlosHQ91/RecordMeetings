@@ -303,41 +303,96 @@ document.addEventListener('DOMContentLoaded', () => {
     showToast("⚙️ Procesando audio con Whisper... Puede tardar unos segundos.");
 
     try {
-      // 1. Convert audio to 16kHz WAV in-browser
-      if (!recordedAudioWavBlob) {
-        recordedAudioWavBlob = await DualAudioMixer.exportToWav(recordedVideoBlob);
-      }
-
-      // 2. Try sending to backend Whisper
+      // Direct send of recording without browser RAM explosion
+      const fileToSend = recordedVideoBlob;
       const formData = new FormData();
-      formData.append('file', recordedAudioWavBlob, 'meeting-audio.wav');
+      formData.append('file', fileToSend, 'meeting-recording.webm');
       formData.append('model_size', 'base');
 
-      let response = null;
-      const targets = [
-        (backendBaseUrl ? `${backendBaseUrl}/api/transcribe` : ''),
-        'http://127.0.0.1:8765/api/transcribe',
-        'http://localhost:8765/api/transcribe',
-        '/api/transcribe'
-      ].filter(Boolean);
+      const base = backendBaseUrl || 'http://127.0.0.1:8765';
+      const asyncUrl = `${base}/api/transcribe/async`;
 
-      for (const targetUrl of targets) {
-        try {
-          response = await fetch(targetUrl, {
-            method: 'POST',
-            body: formData
-          });
-          if (response && response.ok) break;
-        } catch (netErr) {
-          // continuar con siguiente endpoint
+      let jobStarted = false;
+      let job_id = null;
+
+      try {
+        const jobRes = await fetch(asyncUrl, { method: 'POST', body: formData });
+        if (jobRes && jobRes.ok) {
+          const jobJson = await jobRes.json();
+          job_id = jobJson.job_id;
+          jobStarted = true;
         }
+      } catch (e) {
+        console.warn("[MeetRecord AI] Async endpoint no disponible, probando fallback...");
+      }
+
+      if (jobStarted && job_id) {
+        showToast("⏳ Transcripción iniciada en segundo plano. Procesando...");
+        // Poll status
+        const pollJob = async () => {
+          return new Promise((resolve, reject) => {
+            const interval = setInterval(async () => {
+              try {
+                const sRes = await fetch(`${base}/api/transcribe/status/${job_id}`);
+                if (!sRes.ok) return;
+                const jobData = await sRes.json();
+
+                if (jobData.status === 'processing') {
+                  const p = jobData.progress || 0;
+                  btnTranscribe.innerHTML = `
+                    <span class="dot-indicator"></span> Transcribiendo: ${p}%
+                  `;
+                  // Stream segments in real time to UI
+                  if (jobData.segments && jobData.segments.length > 0) {
+                    transcriptArea.innerHTML = '';
+                    jobData.segments.forEach(seg => {
+                      const m = Math.floor(seg.start / 60).toString().padStart(2, '0');
+                      const s = Math.floor(seg.start % 60).toString().padStart(2, '0');
+                      appendTranscriptSegment(`[${m}:${s}]`, seg.text);
+                    });
+                  }
+                } else if (jobData.status === 'completed') {
+                  clearInterval(interval);
+                  resolve(jobData);
+                } else if (jobData.status === 'error') {
+                  clearInterval(interval);
+                  reject(new Error(jobData.error || 'Error en transcripción'));
+                }
+              } catch (err) {}
+            }, 1800);
+          });
+        };
+
+        const result = await pollJob();
+        currentTranscriptData = result;
+
+        btnDownloadTxt.disabled = false;
+        btnDownloadSrt.disabled = false;
+        btnSummarize.disabled = false;
+        btnSummarize.click();
+        showToast("✨ ¡Transcripción de reunión completada con éxito!");
+        return;
+      }
+
+      // Synchronous fallback
+      let response = null;
+      const syncTargets = [
+        `${base}/api/transcribe`,
+        'http://127.0.0.1:8765/api/transcribe',
+        '/api/transcribe'
+      ];
+
+      for (const targetUrl of syncTargets) {
+        try {
+          response = await fetch(targetUrl, { method: 'POST', body: formData });
+          if (response && response.ok) break;
+        } catch (netErr) {}
       }
 
       if (response && response.ok) {
         const result = await response.json();
         currentTranscriptData = result;
 
-        // Render transcript
         transcriptArea.innerHTML = '';
         if (result.segments && result.segments.length > 0) {
           result.segments.forEach(seg => {
@@ -352,7 +407,6 @@ document.addEventListener('DOMContentLoaded', () => {
         btnDownloadTxt.disabled = false;
         btnDownloadSrt.disabled = false;
         btnSummarize.disabled = false;
-
         btnSummarize.click();
         showToast("✨ ¡Transcripción completada con Whisper!");
         return;
