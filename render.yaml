@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: meetrecord-ai
+    env: docker
+    dockerfilePath: Dockerfile
+    plan: free
+    region: oregon
+    healthCheckPath: /api/system-info
+    envVars:
+      - key: PORT
+        value: 8765
