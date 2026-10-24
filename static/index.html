@@ -832,7 +832,7 @@ input[type="range"] {
     </div>
 
     <div class="header-status">
-      <button id="btnOpenSettings" class="btn-groq-settings" title="Configurar Aceleración Groq Cloud">
+      <button id="btnOpenSettings" class="btn-groq-settings" title="Configurar Aceleración Groq Cloud" onclick="openGroqModal();">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
           <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
         </svg>
@@ -1070,7 +1070,7 @@ input[type="range"] {
   </div>
 
   <!-- Modal Groq API Key -->
-  <div id="modalSettings" class="modal-overlay" style="display: none;">
+  <div id="modalSettings" class="modal-overlay" style="display: none;" onclick="if(event.target === this) closeGroqModal();">
     <div class="modal-card">
       <div class="modal-header">
         <div style="display: flex; align-items: center; gap: 0.6rem;">
@@ -1079,7 +1079,7 @@ input[type="range"] {
           </svg>
           <h3>Aceleración con Groq Cloud</h3>
         </div>
-        <button id="btnCloseSettings" class="modal-close">&times;</button>
+        <button id="btnCloseSettings" class="modal-close" onclick="closeGroqModal();">&times;</button>
       </div>
       <div class="modal-body">
         <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 1.1rem; line-height: 1.55;">
@@ -1097,17 +1097,48 @@ input[type="range"] {
           <br><em>(Nota: también puedes añadirla en Render Dashboard &gt; Environment &gt; <code>GROQ_API_KEY</code>).</em>
         </div>
         <div style="display: flex; justify-content: flex-end; gap: 0.6rem;">
-          <button id="btnRemoveGroqKey" class="btn btn-secondary" style="font-size: 0.85rem; padding: 0.6rem 1rem;">Borrar Clave</button>
-          <button id="btnSaveGroqKey" class="btn btn-primary" style="font-size: 0.85rem; padding: 0.6rem 1.4rem;">Guardar y Activar</button>
+          <button id="btnRemoveGroqKey" class="btn btn-secondary" style="font-size: 0.85rem; padding: 0.6rem 1rem;" onclick="removeGroqKeyDirect();">Borrar Clave</button>
+          <button id="btnSaveGroqKey" class="btn btn-primary" style="font-size: 0.85rem; padding: 0.6rem 1.4rem;" onclick="saveGroqKeyDirect();">Guardar y Activar</button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Scripts -->
-  <script src="./js/audio-mixer.js"></script>
-  <script src="./js/visualizer.js"></script>
-  <script src="./js/recorder.js"></script>
-  <script src="./js/app.js"></script>
+  <script>
+    function openGroqModal() {
+      var m = document.getElementById('modalSettings');
+      if (m) {
+        m.style.display = 'flex';
+        var input = document.getElementById('inputGroqApiKey');
+        if (input) input.value = localStorage.getItem('meetrecord_groq_api_key') || '';
+      }
+    }
+    function closeGroqModal() {
+      var m = document.getElementById('modalSettings');
+      if (m) m.style.display = 'none';
+    }
+    function saveGroqKeyDirect() {
+      var input = document.getElementById('inputGroqApiKey');
+      var val = (input ? input.value : '').trim();
+      if (!val) {
+        alert("Por favor ingresa una clave válida que comience con gsk_");
+        return;
+      }
+      localStorage.setItem('meetrecord_groq_api_key', val);
+      closeGroqModal();
+      location.reload();
+    }
+    function removeGroqKeyDirect() {
+      localStorage.removeItem('meetrecord_groq_api_key');
+      closeGroqModal();
+      location.reload();
+    }
+  </script>
+
+  <!-- Scripts with cache busting -->
+  <script src="./js/audio-mixer.js?v=2.1"></script>
+  <script src="./js/visualizer.js?v=2.1"></script>
+  <script src="./js/recorder.js?v=2.1"></script>
+  <script src="./js/app.js?v=2.1"></script>
 </body>
 </html>
