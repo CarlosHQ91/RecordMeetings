@@ -250,16 +250,34 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  function appendTranscriptSegment(timestamp, text) {
+  function appendTranscriptSegment(timestamp, text, seconds = 0) {
     const emptyMsg = transcriptArea.querySelector('.transcript-empty');
     if (emptyMsg) emptyMsg.remove();
 
     const seg = document.createElement('div');
     seg.className = 'segment-item';
+    seg.dataset.seconds = seconds;
     seg.innerHTML = `
-      <div class="segment-timestamp">${timestamp}</div>
+      <div class="segment-timestamp" title="Clic para reproducir video desde este segundo">
+        <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+        <span>${timestamp}</span>
+      </div>
       <div class="segment-text">${escapeHtml(text)}</div>
     `;
+
+    const tsBtn = seg.querySelector('.segment-timestamp');
+    tsBtn.addEventListener('click', () => {
+      if (playbackPreview && playbackPreview.src) {
+        playbackPreview.currentTime = Math.max(0, seconds - 0.2);
+        playbackPreview.play();
+        document.querySelectorAll('.segment-item').forEach(el => el.classList.remove('active-seek'));
+        seg.classList.add('active-seek');
+        showToast(`⏱️ Saltando video a ${timestamp}`);
+      } else {
+        showToast(`⏱️ Marca de tiempo: ${timestamp}`);
+      }
+    });
+
     transcriptArea.appendChild(seg);
     transcriptArea.scrollTop = transcriptArea.scrollHeight;
   }
@@ -334,13 +352,19 @@ document.addEventListener('DOMContentLoaded', () => {
     btnDownloadMd.disabled = true;
     btnSummarize.disabled = true;
 
-    // 6. Reset transcription and summary panels
+    // 6. Reset transcription, search and chat panels
+    if (document.getElementById('searchTranscript')) {
+      document.getElementById('searchTranscript').value = '';
+    }
+    if (document.getElementById('searchResultCount')) {
+      document.getElementById('searchResultCount').textContent = '';
+    }
     transcriptArea.innerHTML = `
       <div class="transcript-empty">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
         </svg>
-        <span>La transcripción aparecerá aquí durante o después de la reunión.</span>
+        <span>La transcripción aparecerá aquí durante o después de la reunión. Haz clic en los timestamps para saltar el video.</span>
       </div>
     `;
 
@@ -349,6 +373,22 @@ document.addEventListener('DOMContentLoaded', () => {
         <p>Genera la transcripción primero para obtener el resumen ejecutivo y lista de tareas automáticas.</p>
       </div>
     `;
+
+    const chatMessages = document.getElementById('chatMessages');
+    if (chatMessages) {
+      chatMessages.innerHTML = `
+        <div class="chat-welcome">
+          <div class="chat-welcome-icon">💬</div>
+          <h4>Pregúntale a la Reunión</h4>
+          <p>Pregunta lo que sea sobre la reunión grabada. IA responderá basándose en la transcripción exacta.</p>
+          <div class="chat-suggestions">
+            <button class="chat-pill" onclick="window.askSuggested && window.askSuggested('¿Cuáles fueron las decisiones más importantes tomadas?')">📌 Decisiones más importantes</button>
+            <button class="chat-pill" onclick="window.askSuggested && window.askSuggested('¿Quién tiene tareas o compromisos asignados?')">📋 Tareas y responsables</button>
+            <button class="chat-pill" onclick="window.askSuggested && window.askSuggested('¿Se mencionaron fechas límite o plazos acordados?')">📅 Fechas límite y plazos</button>
+          </div>
+        </div>
+      `;
+    }
 
     // Reset tab to transcription
     const tabFirst = document.querySelector('[data-tab="transcription"]');
@@ -425,7 +465,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     jobData.segments.forEach(seg => {
                       const m = Math.floor(seg.start / 60).toString().padStart(2, '0');
                       const s = Math.floor(seg.start % 60).toString().padStart(2, '0');
-                      appendTranscriptSegment(`[${m}:${s}]`, seg.text);
+                      appendTranscriptSegment(`[${m}:${s}]`, seg.text, seg.start || 0);
                     });
                   }
                 } else if (jobData.status === 'completed') {
@@ -473,10 +513,10 @@ document.addEventListener('DOMContentLoaded', () => {
           result.segments.forEach(seg => {
             const m = Math.floor(seg.start / 60).toString().padStart(2, '0');
             const s = Math.floor(seg.start % 60).toString().padStart(2, '0');
-            appendTranscriptSegment(`[${m}:${s}]`, seg.text);
+            appendTranscriptSegment(`[${m}:${s}]`, seg.text, seg.start || 0);
           });
         } else {
-          appendTranscriptSegment('[00:00]', result.text || 'Sin texto detectado.');
+          appendTranscriptSegment('[00:00]', result.text || 'Sin texto detectado.', 0);
         }
 
         btnDownloadTxt.disabled = false;
@@ -721,4 +761,139 @@ document.addEventListener('DOMContentLoaded', () => {
     btnTranscribe.disabled = false;
     btnDownloadVideo.disabled = false;
   });
+
+  // Search in Transcription
+  const searchTranscript = document.getElementById('searchTranscript');
+  const searchResultCount = document.getElementById('searchResultCount');
+
+  if (searchTranscript) {
+    searchTranscript.addEventListener('input', (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      const items = transcriptArea.querySelectorAll('.segment-item');
+      if (!items.length) return;
+
+      if (!q) {
+        items.forEach(item => {
+          item.style.display = 'block';
+          const textEl = item.querySelector('.segment-text');
+          textEl.innerHTML = escapeHtml(textEl.textContent);
+        });
+        if (searchResultCount) searchResultCount.textContent = '';
+        return;
+      }
+
+      let count = 0;
+      let firstMatch = null;
+
+      items.forEach(item => {
+        const textEl = item.querySelector('.segment-text');
+        const raw = textEl.textContent;
+        const lower = raw.toLowerCase();
+        if (lower.includes(q)) {
+          item.style.display = 'block';
+          count++;
+          if (!firstMatch) firstMatch = item;
+          const regex = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+          textEl.innerHTML = escapeHtml(raw).replace(regex, '<mark class="highlight-match">$1</mark>');
+        } else {
+          item.style.display = 'none';
+        }
+      });
+
+      if (searchResultCount) {
+        searchResultCount.textContent = count ? `${count} coincidencia(s)` : 'Sin resultados';
+      }
+      if (firstMatch) {
+        firstMatch.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    });
+  }
+
+  // Interactive Chat Q&A with Meeting
+  const chatMessages = document.getElementById('chatMessages');
+  const chatInput = document.getElementById('chatInput');
+  const btnSendChat = document.getElementById('btnSendChat');
+
+  async function sendChatMessage(query) {
+    const q = (query || (chatInput ? chatInput.value : '')).trim();
+    if (!q) return;
+
+    let transcriptText = "";
+    if (currentTranscriptData && currentTranscriptData.text) {
+      transcriptText = currentTranscriptData.text;
+    } else {
+      const items = transcriptArea.querySelectorAll('.segment-text');
+      transcriptText = Array.from(items).map(i => i.textContent).join(' ');
+    }
+
+    if (!transcriptText.trim()) {
+      showToast("⚠️ Primero genera la transcripción de la reunión.");
+      return;
+    }
+
+    if (chatInput) chatInput.value = '';
+
+    // Remove welcome card if present
+    const welcome = chatMessages.querySelector('.chat-welcome');
+    if (welcome) welcome.style.display = 'none';
+
+    // User message bubble
+    const userMsg = document.createElement('div');
+    userMsg.className = 'chat-msg user';
+    userMsg.innerHTML = `<div class="chat-bubble">${escapeHtml(q)}</div>`;
+    chatMessages.appendChild(userMsg);
+
+    // Assistant loading bubble
+    const assistantMsg = document.createElement('div');
+    assistantMsg.className = 'chat-msg assistant';
+    assistantMsg.innerHTML = `<div class="chat-bubble">⏳ Consultando reunión con IA...</div>`;
+    chatMessages.appendChild(assistantMsg);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    try {
+      const base = backendBaseUrl || (isWebHosted ? window.location.origin : 'http://127.0.0.1:8765');
+      const userGroqKey = (localStorage.getItem('meetrecord_groq_api_key') || '').trim();
+      const res = await fetch(`${base}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transcript: transcriptText,
+          question: q,
+          api_key: userGroqKey || undefined
+        })
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        let formatted = escapeHtml(json.answer || '')
+          .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+          .replace(/\n\n/g, '<br><br>')
+          .replace(/\n/g, '<br>');
+        assistantMsg.querySelector('.chat-bubble').innerHTML = formatted;
+      } else {
+        assistantMsg.querySelector('.chat-bubble').textContent = "❌ Error al consultar asistente.";
+      }
+    } catch (err) {
+      assistantMsg.querySelector('.chat-bubble').textContent = "⚠️ Error de conexión con el backend.";
+    }
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  if (btnSendChat) {
+    btnSendChat.addEventListener('click', () => sendChatMessage());
+  }
+  if (chatInput) {
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        sendChatMessage();
+      }
+    });
+  }
+
+  window.askSuggested = function(question) {
+    const chatTabBtn = document.querySelector('[data-tab="chat"]');
+    if (chatTabBtn) chatTabBtn.click();
+    sendChatMessage(question);
+  };
 });

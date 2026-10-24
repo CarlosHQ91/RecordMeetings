@@ -427,6 +427,62 @@ def summarize_meeting(data: SummaryRequest):
     }
 
 
+class ChatRequest(BaseModel):
+    transcript: str
+    question: str
+    api_key: Optional[str] = None
+
+
+@app.post("/api/chat")
+def chat_with_meeting(data: ChatRequest):
+    """
+    Interactive Q&A assistant about the recorded meeting using Groq Llama 3.3 70B.
+    """
+    question = data.question.strip()
+    transcript = data.transcript.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Pregunta vacía")
+    if not transcript:
+        raise HTTPException(status_code=400, detail="Transcripción vacía")
+
+    active_key = (data.api_key or os.environ.get("GROQ_API_KEY", "")).strip()
+    if active_key:
+        try:
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {active_key}",
+                "Content-Type": "application/json"
+            }
+            prompt = f"""Eres un asistente de reuniones inteligente y preciso.
+A continuación tienes la transcripción completa de una reunión:
+
+--- TRANSCRIPCIÓN ---
+{transcript[:28000]}
+--- FIN DE TRANSCRIPCIÓN ---
+
+Responde a la siguiente pregunta del usuario BASÁNDOTE ÚNICAMENTE en lo hablado en la reunión.
+Si algo no fue mencionado, dilo con honestidad. Sé conciso, útil y destaca acuerdos o personas clave en negritas.
+
+Pregunta: {question}
+"""
+            payload = {
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2
+            }
+            res = requests.post(url, headers=headers, json=payload, timeout=40)
+            if res.ok:
+                ans = res.json()["choices"][0]["message"]["content"]
+                return {"answer": ans}
+        except Exception as e:
+            print(f"[MeetRecord AI] Error en chat con Groq: {e}")
+
+    # Fallback response if no Groq key
+    return {
+        "answer": "Para responder preguntas interactivas con IA avanzada, activa tu clave de Groq (gratis en console.groq.com) usando el botón ⚡ Groq API."
+    }
+
+
 # Static files mount
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 if not os.path.exists(static_dir):
