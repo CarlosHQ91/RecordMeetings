@@ -36,6 +36,69 @@ document.addEventListener('DOMContentLoaded', () => {
   const toast = document.getElementById('toast');
   const toastMsg = document.getElementById('toastMsg');
 
+  // Groq API Settings Elements
+  const btnOpenSettings = document.getElementById('btnOpenSettings');
+  const modalSettings = document.getElementById('modalSettings');
+  const btnCloseSettings = document.getElementById('btnCloseSettings');
+  const inputGroqApiKey = document.getElementById('inputGroqApiKey');
+  const btnSaveGroqKey = document.getElementById('btnSaveGroqKey');
+  const btnRemoveGroqKey = document.getElementById('btnRemoveGroqKey');
+  const groqStatusLabel = document.getElementById('groqStatusLabel');
+
+  function syncGroqUI() {
+    const savedKey = (localStorage.getItem('meetrecord_groq_api_key') || '').trim();
+    if (savedKey) {
+      if (btnOpenSettings) btnOpenSettings.classList.add('active');
+      if (groqStatusLabel) groqStatusLabel.textContent = 'Groq Cloud (Activo ⚡)';
+      if (inputGroqApiKey) inputGroqApiKey.value = savedKey;
+    } else {
+      if (btnOpenSettings) btnOpenSettings.classList.remove('active');
+      if (groqStatusLabel) groqStatusLabel.textContent = 'Groq API (⚡ 1s)';
+      if (inputGroqApiKey) inputGroqApiKey.value = '';
+    }
+  }
+  syncGroqUI();
+
+  if (btnOpenSettings) {
+    btnOpenSettings.addEventListener('click', () => {
+      syncGroqUI();
+      if (modalSettings) modalSettings.style.display = 'flex';
+    });
+  }
+  if (btnCloseSettings) {
+    btnCloseSettings.addEventListener('click', () => {
+      if (modalSettings) modalSettings.style.display = 'none';
+    });
+  }
+  if (modalSettings) {
+    modalSettings.addEventListener('click', (e) => {
+      if (e.target === modalSettings) modalSettings.style.display = 'none';
+    });
+  }
+  if (btnSaveGroqKey) {
+    btnSaveGroqKey.addEventListener('click', () => {
+      const key = (inputGroqApiKey.value || '').trim();
+      if (!key) {
+        showToast("⚠️ Ingresa una clave válida (empieza con gsk_)");
+        return;
+      }
+      localStorage.setItem('meetrecord_groq_api_key', key);
+      syncGroqUI();
+      if (modalSettings) modalSettings.style.display = 'none';
+      showToast("⚡ ¡Groq Cloud activado! Transcripciones en 1-2s.");
+      checkBackend();
+    });
+  }
+  if (btnRemoveGroqKey) {
+    btnRemoveGroqKey.addEventListener('click', () => {
+      localStorage.removeItem('meetrecord_groq_api_key');
+      syncGroqUI();
+      if (modalSettings) modalSettings.style.display = 'none';
+      showToast("ℹ️ Clave Groq borrada.");
+      checkBackend();
+    });
+  }
+
   // Exports
   const btnDownloadVideo = document.getElementById('btnDownloadVideo');
   const btnDownloadAudio = document.getElementById('btnDownloadAudio');
@@ -75,9 +138,15 @@ document.addEventListener('DOMContentLoaded', () => {
           const info = await res.json();
           backendBaseUrl = base;
           backendBadge.classList.remove('offline');
-          backendText.textContent = info.has_whisper 
-            ? `Backend Activo (Whisper ${info.active_model})`
-            : 'Backend Activo (Falta Faster-Whisper)';
+          const userKey = (localStorage.getItem('meetrecord_groq_api_key') || '').trim();
+          if (info.has_groq || userKey) {
+            backendText.textContent = 'Backend Activo (Groq Cloud ⚡)';
+            if (groqStatusLabel) groqStatusLabel.textContent = 'Groq Cloud (Activo ⚡)';
+          } else {
+            backendText.textContent = info.has_whisper 
+              ? `Backend Activo (Whisper ${info.active_model})`
+              : 'Backend Activo (Falta Faster-Whisper)';
+          }
           console.log("[MeetRecord AI] Backend conectado en:", base || 'mismo origen');
           return;
         }
@@ -300,14 +369,22 @@ document.addEventListener('DOMContentLoaded', () => {
       <svg class="dot-indicator" viewBox="0 0 24 24" fill="currentColor"></svg>
       Extrayendo & Transcribiendo...
     `;
-    showToast("⚙️ Procesando audio con Whisper... Puede tardar unos segundos.");
+    const activeGroq = (localStorage.getItem('meetrecord_groq_api_key') || '').trim();
+    if (activeGroq) {
+      showToast("⚡ Procesando audio con Groq Cloud Whisper (1 a 3 seg)...");
+    } else {
+      showToast("⚙️ Procesando audio con Whisper... Puede tardar unos segundos.");
+    }
 
     try {
       // Direct send of recording without browser RAM explosion
       const fileToSend = recordedVideoBlob;
       const formData = new FormData();
       formData.append('file', fileToSend, 'meeting-recording.webm');
-      formData.append('model_size', 'base');
+      formData.append('model_size', 'tiny');
+      if (activeGroq) {
+        formData.append('api_key', activeGroq);
+      }
 
       const base = backendBaseUrl || 'http://127.0.0.1:8765';
       const asyncUrl = `${base}/api/transcribe/async`;
@@ -460,12 +537,14 @@ document.addEventListener('DOMContentLoaded', () => {
       let data = null;
       try {
         const sumUrl = (backendBaseUrl || 'http://127.0.0.1:8765') + '/api/summarize';
+        const userGroqKey = (localStorage.getItem('meetrecord_groq_api_key') || '').trim();
         const response = await fetch(sumUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             transcript: textToSummarize,
-            meeting_title: 'Reunión Meet - ' + new Date().toLocaleDateString()
+            meeting_title: 'Reunión Meet - ' + new Date().toLocaleDateString(),
+            api_key: userGroqKey || undefined
           })
         });
         if (response && response.ok) {

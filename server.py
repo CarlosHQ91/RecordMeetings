@@ -2,6 +2,8 @@ import os
 import sys
 import tempfile
 import traceback
+import json
+import requests
 from typing import Optional, List
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 # Initialize FastAPI app
-app = FastAPI(title="MeetRecord AI API", version="1.0.0")
+app = FastAPI(title="MeetRecord AI API", version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -20,17 +22,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global whisper model cache
+# Global whisper model cache (default tiny for low-memory environments like Render 512MB)
 whisper_model = None
-current_model_size = "base"
+current_model_size = "tiny"
 
-def get_whisper_model(model_size: str = "base"):
+def get_whisper_model(model_size: str = "tiny"):
     global whisper_model, current_model_size
     try:
         from faster_whisper import WhisperModel
         if whisper_model is None or current_model_size != model_size:
             print(f"[MeetRecord AI] Cargando modelo Whisper: {model_size} (CPU/int8)...")
-            # Auto-detect CUDA if available, fallback to CPU
             whisper_model = WhisperModel(
                 model_size,
                 device="auto",
@@ -46,6 +47,55 @@ def get_whisper_model(model_size: str = "base"):
     except Exception as e:
         print(f"[MeetRecord AI] Error al cargar Whisper: {e}")
         return None
+
+
+def transcribe_with_groq(file_path: str, api_key: str, language: Optional[str] = None):
+    """
+    Transcribes audio/video file using Groq Whisper Cloud API (whisper-large-v3-turbo).
+    Ultra-fast (1-2s), zero RAM on server.
+    """
+    url = "https://api.groq.com/openai/v1/audio/transcriptions"
+    headers = {
+        "Authorization": f"Bearer {api_key.strip()}"
+    }
+    with open(file_path, "rb") as f:
+        files = {
+            "file": (os.path.basename(file_path), f, "application/octet-stream")
+        }
+        data = {
+            "model": "whisper-large-v3-turbo",
+            "response_format": "verbose_json"
+        }
+        if language and language != "auto":
+            data["language"] = language
+
+        res = requests.post(url, headers=headers, files=files, data=data, timeout=180)
+        if not res.ok:
+            error_msg = res.text
+            try:
+                err_json = res.json()
+                if "error" in err_json and "message" in err_json["error"]:
+                    error_msg = err_json["error"]["message"]
+            except Exception:
+                pass
+            raise Exception(f"Groq API Error ({res.status_code}): {error_msg}")
+
+        result = res.json()
+        segments = []
+        for s in result.get("segments", []):
+            segments.append({
+                "id": s.get("id", 0),
+                "start": round(s.get("start", 0), 2),
+                "end": round(s.get("end", 0), 2),
+                "text": s.get("text", "").strip()
+            })
+
+        return {
+            "language": result.get("language", "es"),
+            "duration": round(result.get("duration", 0), 2),
+            "text": result.get("text", "").strip(),
+            "segments": segments
+        }
 
 
 class SummaryRequest(BaseModel):
@@ -64,26 +114,55 @@ def system_info():
     except ImportError:
         pass
 
+    has_groq = bool(os.environ.get("GROQ_API_KEY"))
+
+    active_display = "Groq Cloud (whisper-large-v3-turbo)" if has_groq else current_model_size
+
     return {
         "status": "online",
         "python_version": sys.version.split()[0],
-        "has_whisper": has_faster_whisper,
-        "active_model": current_model_size,
-        "available_models": ["tiny", "base", "small", "medium"]
+        "has_whisper": has_faster_whisper or has_groq,
+        "has_groq": has_groq,
+        "active_model": active_display,
+        "available_models": ["tiny", "base", "small", "medium", "groq-whisper-turbo"]
     }
 
 
 # Jobs cache for long recordings (e.g. 4-hour sessions)
 transcription_jobs = {}
 
-def process_transcription_job(job_id: str, tmp_path: str, model_size: str, language: Optional[str]):
+def process_transcription_job(job_id: str, tmp_path: str, model_size: str, language: Optional[str], api_key: Optional[str] = None):
     try:
+        active_key = (api_key or os.environ.get("GROQ_API_KEY", "")).strip()
+
+        # 1. Prioritize Groq API if key is available (Instant speed, 0MB RAM)
+        if active_key:
+            print(f"[MeetRecord AI] Iniciando transcripción con Groq Cloud API (Job: {job_id})...")
+            transcription_jobs[job_id] = {
+                "status": "processing",
+                "progress": 50,
+                "text": "Transcribiendo con Groq Cloud Whisper...",
+                "segments": []
+            }
+            res = transcribe_with_groq(tmp_path, active_key, language)
+            transcription_jobs[job_id] = {
+                "status": "completed",
+                "progress": 100,
+                "language": res["language"],
+                "duration": res["duration"],
+                "text": res["text"],
+                "segments": res["segments"]
+            }
+            print(f"[MeetRecord AI] Transcripción Groq Job {job_id} completada exitosamente.")
+            return
+
+        # 2. Fallback to Local Faster-Whisper
         model = get_whisper_model(model_size)
         if model is None:
             transcription_jobs[job_id] = {"status": "error", "error": "Motor Whisper no disponible"}
             return
 
-        print(f"[MeetRecord AI] Iniciando transcripción en segundo plano (Job: {job_id})...")
+        print(f"[MeetRecord AI] Iniciando transcripción local en segundo plano (Job: {job_id})...")
         segments_gen, info = model.transcribe(
             tmp_path,
             language=language if language and language != "auto" else None,
@@ -140,7 +219,8 @@ def process_transcription_job(job_id: str, tmp_path: str, model_size: str, langu
 async def transcribe_audio_async(
     file: UploadFile = File(...),
     language: Optional[str] = Form(None),
-    model_size: Optional[str] = Form("base")
+    model_size: Optional[str] = Form("tiny"),
+    api_key: Optional[str] = Form(None)
 ):
     """
     Starts an async transcription job for long recordings up to 4+ hours without HTTP timeouts.
@@ -161,7 +241,7 @@ async def transcribe_audio_async(
 
     thread = threading.Thread(
         target=process_transcription_job,
-        args=(job_id, tmp_path, model_size, language),
+        args=(job_id, tmp_path, model_size, language, api_key),
         daemon=True
     )
     thread.start()
@@ -180,10 +260,11 @@ def get_transcribe_status(job_id: str):
 async def transcribe_audio(
     file: UploadFile = File(...),
     language: Optional[str] = Form(None),
-    model_size: Optional[str] = Form("base")
+    model_size: Optional[str] = Form("tiny"),
+    api_key: Optional[str] = Form(None)
 ):
     """
-    Synchronous fallback for short recordings.
+    Synchronous fallback for short recordings. Supports Groq Cloud or local Faster-Whisper.
     """
     try:
         suffix = os.path.splitext(file.filename)[1] or ".webm"
@@ -192,12 +273,30 @@ async def transcribe_audio(
             tmp.write(content)
             tmp_path = tmp.name
 
+        active_key = (api_key or os.environ.get("GROQ_API_KEY", "")).strip()
+
+        # 1. Use Groq Cloud if available (Zero RAM, 1-2s)
+        if active_key:
+            try:
+                res = transcribe_with_groq(tmp_path, active_key, language)
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+                return res
+            except Exception as ge:
+                print(f"[MeetRecord AI] Error Groq directo: {ge}, probando fallback...")
+
+        # 2. Local Faster-Whisper fallback
         model = get_whisper_model(model_size)
         if model is None:
-            os.remove(tmp_path)
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
             return JSONResponse(
                 status_code=503,
-                content={"error": "Motor Whisper no instalado"}
+                content={"error": "Motor Whisper no instalado y clave Groq no configurada"}
             )
 
         segments_gen, info = model.transcribe(
@@ -235,6 +334,43 @@ async def transcribe_audio(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def summarize_with_groq(transcript: str, meeting_title: str, api_key: str):
+    """
+    Generates structured meeting minutes with Groq Llama 3.3 70B model.
+    """
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key.strip()}",
+        "Content-Type": "application/json"
+    }
+    prompt = f"""Eres un asistente ejecutivo experto en minutas de reuniones.
+A continuación tienes la transcripción de la reunión titulada "{meeting_title}".
+Genera un análisis estructurado en formato JSON EXACTO con las siguientes claves:
+{{
+  "title": "{meeting_title}",
+  "summary": "Resumen ejecutivo claro y conciso de los temas tratados en 1-2 párrafos.",
+  "key_points": ["Punto clave 1", "Punto clave 2", "Punto clave 3"],
+  "action_items": ["Tarea / Acuerdo 1 (Responsable si se menciona)", "Tarea / Acuerdo 2"]
+}}
+Responde ÚNICAMENTE con el objeto JSON válido, sin bloques de código ni markdown adicional.
+
+Transcripción:
+{transcript[:25000]}
+"""
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"}
+    }
+    res = requests.post(url, headers=headers, json=payload, timeout=45)
+    if not res.ok:
+        raise Exception(f"Groq Chat API error: {res.text}")
+    
+    parsed = json.loads(res.json()["choices"][0]["message"]["content"])
+    parsed["word_count"] = len(transcript.split())
+    return parsed
+
 
 @app.post("/api/summarize")
 def summarize_meeting(data: SummaryRequest):
@@ -245,7 +381,15 @@ def summarize_meeting(data: SummaryRequest):
     if not transcript:
         raise HTTPException(status_code=400, detail="Transcripción vacía.")
 
-    # Rule-based heuristic extraction for offline mode
+    # 1. Use Groq LLM (Llama 3.3 70B) if API key available
+    active_key = (data.api_key or os.environ.get("GROQ_API_KEY", "")).strip()
+    if active_key:
+        try:
+            return summarize_with_groq(transcript, data.meeting_title or "Reunión de Google Meet", active_key)
+        except Exception as ge:
+            print(f"[MeetRecord AI] Error al resumir con Groq LLM: {ge}. Usando extractor heurístico...")
+
+    # 2. Rule-based heuristic extraction for offline fallback
     sentences = [s.strip() for s in transcript.replace("\n", ". ").split(". ") if len(s.strip()) > 10]
     
     # Identify action items by keywords (Spanish / English)
