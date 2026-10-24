@@ -115,28 +115,28 @@ document.addEventListener('DOMContentLoaded', () => {
   let recordedAudioWavBlob = null;
   let currentTranscriptData = null;
   let currentSummaryData = null;
-  let backendBaseUrl = '';
+
+  const isWebHosted = window.location.protocol.startsWith('http') && 
+                      !['localhost', '127.0.0.1'].includes(window.location.hostname);
+  let backendBaseUrl = isWebHosted ? window.location.origin : 'http://127.0.0.1:8765';
 
   // Initialize visualizer idle state
   visualizer.start();
 
   // Multi-port Backend Auto-Discovery
   async function checkBackend() {
-    const candidates = [
-      '',
-      'http://127.0.0.1:8765',
-      'http://localhost:8765',
-      'http://127.0.0.1:8000',
-      'http://localhost:8000'
-    ];
+    const candidates = isWebHosted 
+      ? [window.location.origin] 
+      : ['http://127.0.0.1:8765', 'http://localhost:8765', 'http://127.0.0.1:8000', window.location.origin];
 
     for (const base of candidates) {
+      if (!base) continue;
       try {
-        const url = base ? `${base}/api/system-info` : '/api/system-info';
-        const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
+        const cleanBase = base.replace(/\/+$/, '');
+        const res = await fetch(`${cleanBase}/api/system-info`, { signal: AbortSignal.timeout(3000) });
         if (res.ok) {
           const info = await res.json();
-          backendBaseUrl = base;
+          backendBaseUrl = cleanBase;
           backendBadge.classList.remove('offline');
           const userKey = (localStorage.getItem('meetrecord_groq_api_key') || '').trim();
           if (info.has_groq || userKey) {
@@ -147,7 +147,7 @@ document.addEventListener('DOMContentLoaded', () => {
               ? `Backend Activo (Whisper ${info.active_model})`
               : 'Backend Activo (Falta Faster-Whisper)';
           }
-          console.log("[MeetRecord AI] Backend conectado en:", base || 'mismo origen');
+          console.log("[MeetRecord AI] Backend conectado en:", cleanBase);
           return;
         }
       } catch (e) {
@@ -386,7 +386,7 @@ document.addEventListener('DOMContentLoaded', () => {
         formData.append('api_key', activeGroq);
       }
 
-      const base = backendBaseUrl || 'http://127.0.0.1:8765';
+      const base = backendBaseUrl || (isWebHosted ? window.location.origin : 'http://127.0.0.1:8765');
       const asyncUrl = `${base}/api/transcribe/async`;
 
       let jobStarted = false;
@@ -453,11 +453,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Synchronous fallback
       let response = null;
-      const syncTargets = [
-        `${base}/api/transcribe`,
-        'http://127.0.0.1:8765/api/transcribe',
-        '/api/transcribe'
-      ];
+      const syncTargets = isWebHosted
+        ? [`${base}/api/transcribe`, '/api/transcribe']
+        : [`${base}/api/transcribe`, 'http://127.0.0.1:8765/api/transcribe', '/api/transcribe'];
 
       for (const targetUrl of syncTargets) {
         try {
@@ -536,7 +534,8 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       let data = null;
       try {
-        const sumUrl = (backendBaseUrl || 'http://127.0.0.1:8765') + '/api/summarize';
+        const base = backendBaseUrl || (isWebHosted ? window.location.origin : 'http://127.0.0.1:8765');
+        const sumUrl = `${base}/api/summarize`;
         const userGroqKey = (localStorage.getItem('meetrecord_groq_api_key') || '').trim();
         const response = await fetch(sumUrl, {
           method: 'POST',
