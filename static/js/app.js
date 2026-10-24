@@ -222,6 +222,9 @@ document.addEventListener('DOMContentLoaded', () => {
       livePreview.style.display = 'none';
 
       recordedVideoBlob = state.blob;
+      if (state.audioBlob) {
+        recordedAudioWavBlob = state.audioBlob;
+      }
       if (recordedVideoBlob) {
         // Load recorded video paused with controls (NO AUTOPLAY)
         playbackPreview.src = URL.createObjectURL(recordedVideoBlob);
@@ -235,7 +238,8 @@ document.addEventListener('DOMContentLoaded', () => {
         btnTranscribe.disabled = false;
         btnReset.style.display = 'inline-flex';
 
-        showToast("⏹️ Grabación detenida y guardada. Puedes reproducir, transcribir o descartar.", 4500);
+        const audioSizeMb = recordedAudioWavBlob ? (recordedAudioWavBlob.size / (1024 * 1024)).toFixed(1) : '0';
+        showToast(`⏹️ Grabación lista (Audio ultra-ligero: ${audioSizeMb} MB). Transcripción ultra-rápida habilitada.`, 5000);
       }
     }
   };
@@ -417,10 +421,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     try {
-      // Direct send of recording without browser RAM explosion
-      const fileToSend = recordedVideoBlob;
+      // Prioritize ultra-compact audio (24kbps Opus, ~10MB/hr) over full 1080p video (1.5GB/hr)
+      // This prevents tab memory crashes, bypasses Groq 25MB limits, and uploads in 1-2 seconds
+      const fileToSend = recordedAudioWavBlob || recordedVideoBlob;
+      const fileName = recordedAudioWavBlob ? 'meeting-audio.webm' : 'meeting-recording.webm';
+
       const formData = new FormData();
-      formData.append('file', fileToSend, 'meeting-recording.webm');
+      formData.append('file', fileToSend, fileName);
       formData.append('model_size', 'tiny');
       if (activeGroq) {
         formData.append('api_key', activeGroq);
@@ -689,13 +696,25 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   btnDownloadAudio.addEventListener('click', async () => {
-    if (!recordedAudioWavBlob && recordedVideoBlob) {
-      showToast("⏳ Extrayendo audio en alta definición...");
-      recordedAudioWavBlob = await DualAudioMixer.exportToWav(recordedVideoBlob);
-    }
     if (recordedAudioWavBlob) {
-      downloadBlob(recordedAudioWavBlob, `audio-reunion-${new Date().toISOString().slice(0, 10)}.wav`);
-      showToast("💾 Descargando audio WAV 16kHz...");
+      const isWav = recordedAudioWavBlob.type.includes('wav');
+      const ext = isWav ? 'wav' : 'webm';
+      downloadBlob(recordedAudioWavBlob, `audio-reunion-${new Date().toISOString().slice(0, 10)}.${ext}`);
+      showToast(`💾 Descargando audio (${ext.toUpperCase()})...`);
+      return;
+    }
+    if (recordedVideoBlob) {
+      showToast("⏳ Extrayendo pista de audio...");
+      try {
+        const wav = await DualAudioMixer.exportToWav(recordedVideoBlob);
+        if (wav) {
+          recordedAudioWavBlob = wav;
+          downloadBlob(wav, `audio-reunion-${new Date().toISOString().slice(0, 10)}.wav`);
+          showToast("💾 Descargando audio WAV...");
+        }
+      } catch (e) {
+        showToast("❌ Error al extraer audio: " + e.message);
+      }
     }
   });
 

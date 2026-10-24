@@ -11,6 +11,11 @@ class MeetingRecorder {
     this.combinedStream = null;
     this.mediaRecorder = null;
     this.recordedChunks = [];
+
+    // Secondary ultra-compact audio recorder (24kbps Opus for Groq / Whisper API)
+    this.audioRecorder = null;
+    this.recordedAudioChunks = [];
+    this.audioStream = null;
     
     this.isRecording = false;
     this.isPaused = false;
@@ -92,7 +97,7 @@ class MeetingRecorder {
 
       this.combinedStream = new MediaStream(tracksToRecord);
 
-      // 5. Select Best Supported Codec
+      // 5. Select Best Supported Video Codec
       const mimeTypes = [
         'video/webm;codecs=vp9,opus',
         'video/webm;codecs=vp8,opus',
@@ -107,7 +112,7 @@ class MeetingRecorder {
         }
       }
 
-      // Optimized bitrate (1.5 Mbps) for rock-solid stability up to 4+ hours
+      // Main Recorder: High quality video + audio for playback/export
       this.mediaRecorder = new MediaRecorder(this.combinedStream, {
         mimeType: selectedMime || 'video/webm',
         videoBitsPerSecond: 1500000 
@@ -120,13 +125,49 @@ class MeetingRecorder {
         }
       };
 
+      // 6. Secondary Dedicated Audio Recorder (ultra-compact ~24kbps Opus)
+      // Produces ~10.8 MB per hour. Allows 2+ hour meetings to upload in 2s and fit Groq 25MB limit.
+      const audioTrack = mixedAudioTrack || (this.screenStream.getAudioTracks().length > 0 ? this.screenStream.getAudioTracks()[0] : null);
+      if (audioTrack) {
+        try {
+          this.audioStream = new MediaStream([audioTrack]);
+          const audioMimes = [
+            'audio/webm;codecs=opus',
+            'audio/webm',
+            'audio/ogg;codecs=opus',
+            'audio/mp4'
+          ];
+          let selectedAudioMime = '';
+          for (const m of audioMimes) {
+            if (MediaRecorder.isTypeSupported(m)) {
+              selectedAudioMime = m;
+              break;
+            }
+          }
+          this.audioRecorder = new MediaRecorder(this.audioStream, {
+            mimeType: selectedAudioMime || 'audio/webm',
+            audioBitsPerSecond: 24000
+          });
+          this.audioRecorder.ondataavailable = (event) => {
+            if (event.data && event.data.size > 0) {
+              this.recordedAudioChunks.push(event.data);
+            }
+          };
+          this.audioRecorder.start(2000);
+          console.log("[MeetRecord AI] Grabador dual ultra-compacto activo (24kbps Opus)");
+        } catch (audRecErr) {
+          console.warn("[MeetRecord AI] No se pudo inicializar grabador secundario de audio:", audRecErr);
+          this.audioRecorder = null;
+        }
+      }
+
       this.mediaRecorder.start(2000); // 2 second slices for low CPU overhead
       this.isRecording = true;
       this.isPaused = false;
       this.startTime = Date.now();
       this.startTimer();
 
-      // 6. Optional: Live In-Browser Transcription (Web Speech API)
+      // 7. Optional: Live In-Browser Transcription (Web Speech API)
       if (options.liveCaptions) {
         this.startLiveSpeechRecognition();
       }
@@ -141,8 +182,13 @@ class MeetingRecorder {
   }
 
   pause() {
-    if (this.mediaRecorder && this.isRecording && !this.isPaused) {
-      this.mediaRecorder.pause();
+    if (this.isRecording && !this.isPaused) {
+      if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+        this.mediaRecorder.pause();
+      }
+      if (this.audioRecorder && this.audioRecorder.state === 'recording') {
+        this.audioRecorder.pause();
+      }
       this.isPaused = true;
       clearInterval(this.timerInterval);
       if (this.onStateChange) this.onStateChange({ status: 'paused' });
@@ -150,8 +196,13 @@ class MeetingRecorder {
   }
 
   resume() {
-    if (this.mediaRecorder && this.isRecording && this.isPaused) {
-      this.mediaRecorder.resume();
+    if (this.isRecording && this.isPaused) {
+      if (this.mediaRecorder && this.mediaRecorder.state === 'paused') {
+        this.mediaRecorder.resume();
+      }
+      if (this.audioRecorder && this.audioRecorder.state === 'paused') {
+        this.audioRecorder.resume();
+      }
       this.isPaused = false;
       this.startTime = Date.now() - (this.elapsedTime * 1000);
       this.startTimer();
@@ -178,17 +229,44 @@ class MeetingRecorder {
       if (this.micStream) {
         this.micStream.getTracks().forEach(t => t.stop());
       }
+      if (this.audioStream) {
+        this.audioStream.getTracks().forEach(t => t.stop());
+      }
 
-      this.mediaRecorder.onstop = () => {
-        const fullBlob = new Blob(this.recordedChunks, { type: this.mediaRecorder.mimeType });
-        this.cleanup();
-        if (this.onStateChange) this.onStateChange({ status: 'stopped', blob: fullBlob });
-        resolve(fullBlob);
+      let videoBlob = null;
+      let audioBlob = null;
+      let pendingStops = 0;
+
+      const checkFinished = () => {
+        pendingStops--;
+        if (pendingStops <= 0) {
+          this.cleanup();
+          if (this.onStateChange) {
+            this.onStateChange({ status: 'stopped', blob: videoBlob, audioBlob: audioBlob });
+          }
+          resolve({ videoBlob, audioBlob });
+        }
       };
 
       if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+        pendingStops++;
+        this.mediaRecorder.onstop = () => {
+          videoBlob = new Blob(this.recordedChunks, { type: this.mediaRecorder.mimeType || 'video/webm' });
+          checkFinished();
+        };
         this.mediaRecorder.stop();
-      } else {
+      }
+
+      if (this.audioRecorder && this.audioRecorder.state !== 'inactive') {
+        pendingStops++;
+        this.audioRecorder.onstop = () => {
+          audioBlob = new Blob(this.recordedAudioChunks, { type: this.audioRecorder.mimeType || 'audio/webm' });
+          checkFinished();
+        };
+        this.audioRecorder.stop();
+      }
+
+      if (pendingStops === 0) {
         this.cleanup();
         resolve(null);
       }
@@ -273,6 +351,10 @@ class MeetingRecorder {
       this.micStream.getTracks().forEach(t => t.stop());
       this.micStream = null;
     }
+    if (this.audioStream) {
+      this.audioStream.getTracks().forEach(t => t.stop());
+      this.audioStream = null;
+    }
     if (this.combinedStream) {
       this.combinedStream.getTracks().forEach(t => t.stop());
       this.combinedStream = null;
@@ -280,6 +362,8 @@ class MeetingRecorder {
     if (this.audioMixer) {
       this.audioMixer.close();
     }
+    this.mediaRecorder = null;
+    this.audioRecorder = null;
     clearInterval(this.timerInterval);
   }
 }

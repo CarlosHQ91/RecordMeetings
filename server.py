@@ -4,6 +4,9 @@ import tempfile
 import traceback
 import json
 import requests
+import subprocess
+import uuid
+import threading
 from typing import Optional, List
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 # Initialize FastAPI app
-app = FastAPI(title="MeetRecord AI API", version="1.1.0")
+app = FastAPI(title="MeetRecord AI API", version="1.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,53 +52,123 @@ def get_whisper_model(model_size: str = "tiny"):
         return None
 
 
+def prepare_audio_for_groq(file_path: str) -> List[str]:
+    """
+    Ensures audio complies with Groq's 25MB limit.
+    If input is video or >20MB, converts/compresses to 24kbps mono MP3 with ffmpeg (~10.8MB per hour).
+    If still >24MB (e.g. 3+ hours), automatically segments audio into 20-minute chunks.
+    """
+    try:
+        size_bytes = os.path.getsize(file_path)
+        ext = os.path.splitext(file_path)[1].lower()
+
+        # If audio is already small (<24MB), use directly
+        if size_bytes < 24 * 1024 * 1024 and ext in [".mp3", ".wav", ".m4a", ".ogg", ".webm"]:
+            return [file_path]
+
+        print(f"[MeetRecord AI] Comprimiendo audio con ffmpeg (tamaño original: {round(size_bytes / 1024 / 1024, 1)} MB)...")
+        compressed_mp3 = tempfile.mktemp(suffix=".mp3")
+        cmd = [
+            "ffmpeg", "-y", "-i", file_path,
+            "-vn", "-ac", "1", "-ar", "16000",
+            "-b:a", "24k", compressed_mp3
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+        comp_size = os.path.getsize(compressed_mp3)
+        print(f"[MeetRecord AI] Audio optimizado: {round(comp_size / 1024 / 1024, 2)} MB.")
+
+        if comp_size < 24 * 1024 * 1024:
+            return [compressed_mp3]
+
+        # For ultra-long meetings (>3 hours) that exceed 24MB, split into 20-minute chunks
+        print("[MeetRecord AI] Reunión extensa: dividiendo en fragmentos de 20 min...")
+        out_dir = tempfile.mkdtemp()
+        chunk_pattern = os.path.join(out_dir, "chunk_%03d.mp3")
+        cmd_split = [
+            "ffmpeg", "-y", "-i", compressed_mp3,
+            "-f", "segment", "-segment_time", "1200",
+            "-c", "copy", chunk_pattern
+        ]
+        subprocess.run(cmd_split, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        chunks = sorted([os.path.join(out_dir, f) for f in os.listdir(out_dir) if f.startswith("chunk_")])
+        if chunks:
+            return chunks
+        return [compressed_mp3]
+    except Exception as e:
+        print(f"[MeetRecord AI] Error en optimización de audio con ffmpeg: {e}")
+        return [file_path]
+
+
 def transcribe_with_groq(file_path: str, api_key: str, language: Optional[str] = None):
     """
-    Transcribes audio/video file using Groq Whisper Cloud API (whisper-large-v3-turbo).
-    Ultra-fast (1-2s), zero RAM on server.
+    Transcribes audio file using Groq Whisper Cloud API (whisper-large-v3-turbo).
+    Supports multi-hour recordings via automatic ffmpeg compression and chunking.
     """
     url = "https://api.groq.com/openai/v1/audio/transcriptions"
     headers = {
         "Authorization": f"Bearer {api_key.strip()}"
     }
-    with open(file_path, "rb") as f:
-        files = {
-            "file": (os.path.basename(file_path), f, "application/octet-stream")
-        }
-        data = {
-            "model": "whisper-large-v3-turbo",
-            "response_format": "verbose_json"
-        }
-        if language and language != "auto":
-            data["language"] = language
 
-        res = requests.post(url, headers=headers, files=files, data=data, timeout=180)
-        if not res.ok:
-            error_msg = res.text
+    chunks = prepare_audio_for_groq(file_path)
+    all_segments = []
+    full_text_list = []
+    total_offset = 0.0
+    detected_language = "es"
+
+    for chunk_path in chunks:
+        with open(chunk_path, "rb") as f:
+            files = {
+                "file": (os.path.basename(chunk_path), f, "application/octet-stream")
+            }
+            data = {
+                "model": "whisper-large-v3-turbo",
+                "response_format": "verbose_json"
+            }
+            if language and language != "auto":
+                data["language"] = language
+
+            res = requests.post(url, headers=headers, files=files, data=data, timeout=180)
+            if not res.ok:
+                error_msg = res.text
+                try:
+                    err_json = res.json()
+                    if "error" in err_json and "message" in err_json["error"]:
+                        error_msg = err_json["error"]["message"]
+                except Exception:
+                    pass
+                raise Exception(f"Groq API Error ({res.status_code}): {error_msg}")
+
+            result = res.json()
+            detected_language = result.get("language", detected_language)
+            chunk_duration = float(result.get("duration", 0.0))
+
+            for s in result.get("segments", []):
+                all_segments.append({
+                    "id": len(all_segments),
+                    "start": round(s.get("start", 0) + total_offset, 2),
+                    "end": round(s.get("end", 0) + total_offset, 2),
+                    "text": s.get("text", "").strip()
+                })
+
+            chunk_text = result.get("text", "").strip()
+            if chunk_text:
+                full_text_list.append(chunk_text)
+
+            total_offset += chunk_duration
+
+        if chunk_path != file_path:
             try:
-                err_json = res.json()
-                if "error" in err_json and "message" in err_json["error"]:
-                    error_msg = err_json["error"]["message"]
+                os.remove(chunk_path)
             except Exception:
                 pass
-            raise Exception(f"Groq API Error ({res.status_code}): {error_msg}")
 
-        result = res.json()
-        segments = []
-        for s in result.get("segments", []):
-            segments.append({
-                "id": s.get("id", 0),
-                "start": round(s.get("start", 0), 2),
-                "end": round(s.get("end", 0), 2),
-                "text": s.get("text", "").strip()
-            })
-
-        return {
-            "language": result.get("language", "es"),
-            "duration": round(result.get("duration", 0), 2),
-            "text": result.get("text", "").strip(),
-            "segments": segments
-        }
+    return {
+        "language": detected_language,
+        "duration": round(total_offset, 2),
+        "text": " ".join(full_text_list),
+        "segments": all_segments
+    }
 
 
 class SummaryRequest(BaseModel):
