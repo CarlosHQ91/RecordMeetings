@@ -357,19 +357,21 @@ Responde ÚNICAMENTE con el objeto JSON válido, sin bloques de código ni markd
 Transcripción:
 {transcript[:25000]}
 """
-    payload = {
-        "model": "llama-3.3-70b-versatile",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.2,
-        "response_format": {"type": "json_object"}
-    }
-    res = requests.post(url, headers=headers, json=payload, timeout=45)
-    if not res.ok:
-        raise Exception(f"Groq Chat API error: {res.text}")
-    
-    parsed = json.loads(res.json()["choices"][0]["message"]["content"])
-    parsed["word_count"] = len(transcript.split())
-    return parsed
+    res = None
+    for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+        payload = {
+            "model": model_name,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"}
+        }
+        res = requests.post(url, headers=headers, json=payload, timeout=45)
+        if res.ok:
+            parsed = json.loads(res.json()["choices"][0]["message"]["content"])
+            parsed["word_count"] = len(transcript.split())
+            return parsed
+
+    raise Exception(f"Groq Chat API error: {res.text if res else 'Unknown'}")
 
 
 @app.post("/api/summarize")
@@ -465,21 +467,38 @@ Si algo no fue mencionado, dilo con honestidad. Sé conciso, útil y destaca acu
 
 Pregunta: {question}
 """
-            payload = {
-                "model": "llama-3.3-70b-versatile",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.2
-            }
-            res = requests.post(url, headers=headers, json=payload, timeout=40)
-            if res.ok:
-                ans = res.json()["choices"][0]["message"]["content"]
-                return {"answer": ans}
+            # Try primary model (Llama 3.3 70B), fallback to ultra-fast Llama 3.1 8B
+            for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+                payload = {
+                    "model": model_name,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.2
+                }
+                res = requests.post(url, headers=headers, json=payload, timeout=40)
+                if res.ok:
+                    ans = res.json()["choices"][0]["message"]["content"]
+                    return {"answer": ans}
+                elif res.status_code == 401:
+                    return {"answer": "⚠️ Clave Groq no autorizada (Error 401). Verifica que la clave copiada sea correcta en el botón ⚡ Groq API."}
+
+            # If both models fail, extract error message
+            err_text = res.text
+            try:
+                err_json = res.json()
+                if "error" in err_json and "message" in err_json["error"]:
+                    err_text = err_json["error"]["message"]
+            except Exception:
+                pass
+            print(f"[MeetRecord AI] Groq Chat Error ({res.status_code}): {err_text}")
+            return {"answer": f"⚠️ Groq API Error ({res.status_code}): {err_text}"}
+
         except Exception as e:
             print(f"[MeetRecord AI] Error en chat con Groq: {e}")
+            return {"answer": f"⚠️ Error al conectar con Groq Cloud: {str(e)}"}
 
-    # Fallback response if no Groq key
+    # No key found at all (neither server env nor client request)
     return {
-        "answer": "Para responder preguntas interactivas con IA avanzada, activa tu clave de Groq (gratis en console.groq.com) usando el botón ⚡ Groq API."
+        "answer": "⚠️ No se detectó ninguna clave de Groq activa (ni en Render ni en el navegador). Abre el botón **⚡ Groq API** en la esquina superior para guardarla o agrégala en Render como `GROQ_API_KEY`."
     }
 
 
