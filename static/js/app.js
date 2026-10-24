@@ -254,69 +254,103 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  function appendTranscriptSegment(timestamp, text, seconds = 0) {
-    const emptyMsg = transcriptArea.querySelector('.transcript-empty');
-    if (emptyMsg) emptyMsg.remove();
-
-    const seg = document.createElement('div');
-    seg.className = 'segment-item';
-    seg.dataset.seconds = seconds;
-    seg.innerHTML = `
-      <div class="segment-timestamp" title="Clic para reproducir video desde este segundo">
-        <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-        <span>${timestamp}</span>
-      </div>
-      <div class="segment-text">${escapeHtml(text)}</div>
-    `;
-
-    const tsBtn = seg.querySelector('.segment-timestamp');
-    tsBtn.addEventListener('click', () => {
-      if (playbackPreview && playbackPreview.src) {
-        playbackPreview.currentTime = Math.max(0, seconds - 0.2);
-        playbackPreview.play();
-        document.querySelectorAll('.segment-item').forEach(el => el.classList.remove('active-seek'));
-        seg.classList.add('active-seek');
-        showToast(`⏱️ Saltando video a ${timestamp}`);
-      } else {
-        showToast(`⏱️ Marca de tiempo: ${timestamp}`);
-      }
-    });
-
-    transcriptArea.appendChild(seg);
-    transcriptArea.scrollTop = transcriptArea.scrollHeight;
+  function escapeHtml(str) {
+    if (str === null || str === undefined) return "";
+    return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
-  function escapeHtml(str) {
-    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  function appendTranscriptSegment(timestamp, text, seconds = 0) {
+    try {
+      const emptyMsg = transcriptArea.querySelector('.transcript-empty');
+      if (emptyMsg) emptyMsg.remove();
+
+      const safeText = String(text || '');
+      const seg = document.createElement('div');
+      seg.className = 'segment-item';
+      seg.dataset.seconds = seconds;
+      seg.innerHTML = `
+        <div class="segment-timestamp" title="Clic para reproducir video desde este segundo">
+          <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+          <span>${timestamp}</span>
+        </div>
+        <div class="segment-text">${escapeHtml(safeText)}</div>
+      `;
+
+      const tsBtn = seg.querySelector('.segment-timestamp');
+      tsBtn.addEventListener('click', () => {
+        if (playbackPreview && playbackPreview.src) {
+          playbackPreview.currentTime = Math.max(0, seconds - 0.2);
+          playbackPreview.play();
+          document.querySelectorAll('.segment-item').forEach(el => el.classList.remove('active-seek'));
+          seg.classList.add('active-seek');
+          showToast(`⏱️ Saltando video a ${timestamp}`);
+        } else {
+          showToast(`⏱️ Marca de tiempo: ${timestamp}`);
+        }
+      });
+
+      transcriptArea.appendChild(seg);
+      transcriptArea.scrollTop = transcriptArea.scrollHeight;
+    } catch (err) {
+      console.error("[MeetRecord AI] Error en appendTranscriptSegment:", err);
+    }
   }
 
   function renderTranscription(result) {
     if (!result) return;
-    transcriptArea.innerHTML = '';
+    try {
+      console.log("[MeetRecord AI] Renderizando transcripción...", result);
+      transcriptArea.innerHTML = '';
 
-    if (result.segments && Array.isArray(result.segments) && result.segments.length > 0) {
-      result.segments.forEach(seg => {
-        const startSec = typeof seg.start === 'number' ? seg.start : 0;
-        const m = Math.floor(startSec / 60).toString().padStart(2, '0');
-        const s = Math.floor(startSec % 60).toString().padStart(2, '0');
-        appendTranscriptSegment(`[${m}:${s}]`, seg.text || '', startSec);
-      });
-    } else if (result.text && result.text.trim()) {
-      appendTranscriptSegment('[00:00]', result.text.trim(), 0);
-    } else {
-      appendTranscriptSegment('[00:00]', 'No se detectaron palabras en la grabación de audio.', 0);
+      const segments = result.segments;
+      if (Array.isArray(segments) && segments.length > 0) {
+        segments.forEach(seg => {
+          const startSec = typeof seg.start === 'number' ? seg.start : 0;
+          const m = Math.floor(startSec / 60).toString().padStart(2, '0');
+          const s = Math.floor(startSec % 60).toString().padStart(2, '0');
+          const text = String(seg.text || '').trim();
+          if (text) {
+            appendTranscriptSegment(`[${m}:${s}]`, text, startSec);
+          }
+        });
+      } else if (result.text && String(result.text).trim()) {
+        const full = String(result.text).trim();
+        const parts = full.split(/(?<=[.?!])\s+/).filter(p => p.trim().length > 0);
+        if (parts.length > 1) {
+          parts.forEach((p, idx) => {
+            appendTranscriptSegment(`[${idx + 1}]`, p, idx * 3);
+          });
+        } else {
+          appendTranscriptSegment('[00:00]', full, 0);
+        }
+      } else {
+        appendTranscriptSegment('[00:00]', 'No se detectaron palabras en la grabación de audio.', 0);
+      }
+
+      // Limpiar input de búsqueda previa
+      const searchInput = document.getElementById('searchTranscript');
+      if (searchInput) searchInput.value = '';
+      const searchCount = document.getElementById('searchResultCount');
+      if (searchCount) searchCount.textContent = '';
+
+      // Asegurar que la pestaña activa sea Transcripción
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      const tabTransBtn = document.querySelector('[data-tab="transcription"]');
+      const tabTransContent = document.getElementById('tab-transcription');
+      if (tabTransBtn) tabTransBtn.classList.add('active');
+      if (tabTransContent) tabTransContent.classList.add('active');
+
+      console.log("[MeetRecord AI] Transcripción renderizada con éxito en DOM.");
+    } catch (e) {
+      console.error("[MeetRecord AI] Error al renderizar transcripción:", e);
+      transcriptArea.innerHTML = `<div class="segment-item"><div class="segment-text">${escapeHtml(result.text || 'Transcripción completada.')}</div></div>`;
     }
-
-    // Limpiar input de búsqueda previa
-    const searchInput = document.getElementById('searchTranscript');
-    if (searchInput) searchInput.value = '';
-    const searchCount = document.getElementById('searchResultCount');
-    if (searchCount) searchCount.textContent = '';
-
-    // Asegurar que la pestaña activa sea Transcripción
-    const tabTrans = document.querySelector('[data-tab="transcription"]');
-    if (tabTrans) tabTrans.click();
   }
+
+  // Expose helpers globally
+  window.renderTranscription = renderTranscription;
+  window.getCurrentTranscript = () => currentTranscriptData;
 
   // Button Actions
   btnStart.addEventListener('click', async () => {
@@ -791,7 +825,15 @@ document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
       btn.classList.add('active');
-      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+      const targetContent = document.getElementById('tab-' + btn.dataset.tab);
+      if (targetContent) targetContent.classList.add('active');
+
+      // Auto re-render if user clicks transcription tab and data exists
+      if (btn.dataset.tab === 'transcription' && currentTranscriptData) {
+        if (!transcriptArea.querySelector('.segment-item')) {
+          renderTranscription(currentTranscriptData);
+        }
+      }
     });
   });
 
