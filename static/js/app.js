@@ -290,6 +290,34 @@ document.addEventListener('DOMContentLoaded', () => {
     return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
+  function renderTranscription(result) {
+    if (!result) return;
+    transcriptArea.innerHTML = '';
+
+    if (result.segments && Array.isArray(result.segments) && result.segments.length > 0) {
+      result.segments.forEach(seg => {
+        const startSec = typeof seg.start === 'number' ? seg.start : 0;
+        const m = Math.floor(startSec / 60).toString().padStart(2, '0');
+        const s = Math.floor(startSec % 60).toString().padStart(2, '0');
+        appendTranscriptSegment(`[${m}:${s}]`, seg.text || '', startSec);
+      });
+    } else if (result.text && result.text.trim()) {
+      appendTranscriptSegment('[00:00]', result.text.trim(), 0);
+    } else {
+      appendTranscriptSegment('[00:00]', 'No se detectaron palabras en la grabación de audio.', 0);
+    }
+
+    // Limpiar input de búsqueda previa
+    const searchInput = document.getElementById('searchTranscript');
+    if (searchInput) searchInput.value = '';
+    const searchCount = document.getElementById('searchResultCount');
+    if (searchCount) searchCount.textContent = '';
+
+    // Asegurar que la pestaña activa sea Transcripción
+    const tabTrans = document.querySelector('[data-tab="transcription"]');
+    if (tabTrans) tabTrans.click();
+  }
+
   // Button Actions
   btnStart.addEventListener('click', async () => {
     try {
@@ -490,11 +518,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const result = await pollJob();
         currentTranscriptData = result;
 
+        renderTranscription(result);
+
         btnDownloadTxt.disabled = false;
         btnDownloadSrt.disabled = false;
         btnSummarize.disabled = false;
-        btnSummarize.click();
-        showToast("✨ ¡Transcripción de reunión completada con éxito!");
+        generateSummary(false);
         return;
       }
 
@@ -515,22 +544,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const result = await response.json();
         currentTranscriptData = result;
 
-        transcriptArea.innerHTML = '';
-        if (result.segments && result.segments.length > 0) {
-          result.segments.forEach(seg => {
-            const m = Math.floor(seg.start / 60).toString().padStart(2, '0');
-            const s = Math.floor(seg.start % 60).toString().padStart(2, '0');
-            appendTranscriptSegment(`[${m}:${s}]`, seg.text, seg.start || 0);
-          });
-        } else {
-          appendTranscriptSegment('[00:00]', result.text || 'Sin texto detectado.', 0);
-        }
+        renderTranscription(result);
 
         btnDownloadTxt.disabled = false;
         btnDownloadSrt.disabled = false;
         btnSummarize.disabled = false;
-        btnSummarize.click();
-        showToast("✨ ¡Transcripción completada con Whisper!");
+        generateSummary(false);
         return;
       }
 
@@ -540,9 +559,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (capturedItems.length > 0) {
         const fullText = capturedItems.map(item => item.querySelector('.segment-text').textContent).join(' ');
         currentTranscriptData = { text: fullText, segments: [] };
+        renderTranscription(currentTranscriptData);
         btnDownloadTxt.disabled = false;
         btnSummarize.disabled = false;
-        btnSummarize.click();
+        generateSummary(false);
         showToast("⚠️ Backend Whisper no activo. Se usó transcripción en vivo del navegador.", 5000);
       } else {
         showToast("⚠️ Backend offline. Para Whisper: ejecuta 'python server.py' en la terminal.", 6000);
@@ -561,7 +581,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Summarize Flow
-  btnSummarize.addEventListener('click', async () => {
+  async function generateSummary(switchTab = true) {
     let textToSummarize = "";
     if (currentTranscriptData && currentTranscriptData.text) {
       textToSummarize = currentTranscriptData.text;
@@ -576,7 +596,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     btnSummarize.disabled = true;
-    showToast("🧠 Generando minuta ejecutiva y puntos de acción...");
+    if (switchTab) {
+      showToast("🧠 Generando minuta ejecutiva y puntos de acción...");
+    }
 
     try {
       let data = null;
@@ -665,9 +687,12 @@ document.addEventListener('DOMContentLoaded', () => {
       `;
 
       btnDownloadMd.disabled = false;
-      // Switch tab to summary
-      document.querySelector('[data-tab="summary"]').click();
-      showToast("🎉 ¡Minuta y tareas generadas!");
+      if (switchTab) {
+        document.querySelector('[data-tab="summary"]').click();
+        showToast("🎉 ¡Minuta y tareas generadas!");
+      } else {
+        showToast("✨ Transcripción lista. Minuta generada en pestaña 'Resumen' 📝", 4500);
+      }
 
     } catch (err) {
       console.error(err);
@@ -675,7 +700,9 @@ document.addEventListener('DOMContentLoaded', () => {
     } finally {
       btnSummarize.disabled = false;
     }
-  });
+  }
+
+  btnSummarize.addEventListener('click', () => generateSummary(true));
 
   // Downloads Helpers
   function downloadBlob(blob, filename) {
